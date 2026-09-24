@@ -142,6 +142,39 @@ func TestIntegration_ProjectLifecycle(t *testing.T) {
 	}
 }
 
+func TestIntegration_ProjectCreateRejectsUnsafeName(t *testing.T) {
+	rt := mockrt.New()
+	cl, store := newIntegrationServer(t, rt)
+
+	if _, err := cl.CreateProject("../../outside", entities.Resources{CPU: 1, MemoryMB: 512}); err == nil {
+		t.Fatal("expected unsafe project name to be rejected")
+	}
+	assertCallCount(t, rt, "CreateInstance", 0)
+	if projects := store.ListProjects(); len(projects) != 0 {
+		t.Fatalf("unsafe project was persisted: %v", projects)
+	}
+}
+
+func TestIntegration_AppCreateRejectsUnsafeName(t *testing.T) {
+	rt := mockrt.New()
+	cl, store := newIntegrationServer(t, rt)
+	project := seedProjectWithInstance(
+		t, store, "app-name-test", "inst-app-name", entities.InstanceStateRunning,
+	)
+
+	_, err := cl.CreateApp(project.ID, apiserver.CreateAppRequest{
+		Name:          "../../outside",
+		ExecutionMode: entities.ExecutionModeProcess,
+		Binary:        "/bin/true",
+	})
+	if err == nil {
+		t.Fatal("expected unsafe app name to be rejected")
+	}
+	if apps := store.GetApps(project.ID); len(apps) != 0 {
+		t.Fatalf("unsafe app was persisted: %v", apps)
+	}
+}
+
 func testAppCRUD(
 	t *testing.T, cl *client.Client, rt *mockrt.Runtime, projectID string,
 ) {

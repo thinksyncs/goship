@@ -95,6 +95,15 @@ func TestLoad_MissingProject(t *testing.T) {
 	}
 }
 
+func TestLoad_UnsafeProjectName(t *testing.T) {
+	content := "version: \"1\"\nproject: ../registry\n"
+	path := writeTemp(t, content)
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() should fail for an unsafe project name")
+	}
+}
+
 func TestResources_ToEntityResources(t *testing.T) {
 	r := &Resources{CPU: 4, Memory: "8G", Disk: "40G"}
 

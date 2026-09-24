@@ -45,7 +45,10 @@ func TestUserFacingName(t *testing.T) {
 }
 
 func TestVmDir(t *testing.T) {
-	result := vmDir("/home/user/.goship", "myvm")
+	result, err := vmDir("/home/user/.goship", "myvm")
+	if err != nil {
+		t.Fatalf("vmDir() error = %v", err)
+	}
 	expected := filepath.Join("/home/user/.goship", "vms", "myvm")
 	if result != expected {
 		t.Errorf("vmDir() = %q, want %q", result, expected)
@@ -53,10 +56,99 @@ func TestVmDir(t *testing.T) {
 }
 
 func TestDiskPath(t *testing.T) {
-	result := diskPath("/home/user/.goship", "myvm")
+	result, err := diskPath("/home/user/.goship", "myvm")
+	if err != nil {
+		t.Fatalf("diskPath() error = %v", err)
+	}
 	expected := filepath.Join("/home/user/.goship", "vms", "myvm", "disk.qcow2")
 	if result != expected {
 		t.Errorf("diskPath() = %q, want %q", result, expected)
+	}
+}
+
+func TestVMPathsRejectUnsafeNames(t *testing.T) {
+	for _, name := range []string{"", ".", "..", "../registry", "a/../../target", "/tmp/x", "a//b", "bad\x00name"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := vmDir(t.TempDir(), name); err == nil {
+				t.Fatalf("vmDir(%q) should fail", name)
+			}
+			if _, err := diskPath(t.TempDir(), name); err == nil {
+				t.Fatalf("diskPath(%q) should fail", name)
+			}
+		})
+	}
+}
+
+func TestVMPathsPreserveLinuxBackslashNames(t *testing.T) {
+	if _, err := vmDir(t.TempDir(), `a\b`); err != nil {
+		t.Fatalf("vmDir rejected a Linux filename containing a backslash: %v", err)
+	}
+}
+
+func TestVMManagerRejectsUnsafeNameBeforeFilesystemUse(t *testing.T) {
+	root := t.TempDir()
+	sentinel := filepath.Join(root, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &VMManager{dataDir: filepath.Join(root, "data")}
+	if _, err := m.Create(CreateVMOptions{Name: "../..", BaseImage: filepath.Join(root, "missing")}); err == nil {
+		t.Fatal("Create should reject an unsafe name")
+	}
+	if _, err := m.Destroy("../..", false); err == nil {
+		t.Fatal("Destroy should reject an unsafe name")
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("sentinel changed after rejected operations: %v", err)
+	}
+}
+
+func TestRemoveVMDirDoesNotFollowFinalSymlink(t *testing.T) {
+	dataDir := t.TempDir()
+	vmsRoot := filepath.Join(dataDir, "vms")
+	if err := os.MkdirAll(vmsRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	sentinel := filepath.Join(outside, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(vmsRoot, "linked")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	m := &VMManager{dataDir: dataDir}
+	if err := m.removeVMDir("linked"); err != nil {
+		t.Fatalf("removeVMDir() error = %v", err)
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("removeVMDir followed the symlink: %v", err)
+	}
+}
+
+func TestRemoveVMDirRejectsSymlinkedVMRoot(t *testing.T) {
+	dataDir := t.TempDir()
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "victim")
+	if err := os.MkdirAll(victim, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(victim, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dataDir, "vms")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	m := &VMManager{dataDir: dataDir}
+	if err := m.removeVMDir("victim"); err == nil {
+		t.Fatal("removeVMDir should reject a VM root symlink escaping dataDir")
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("removeVMDir followed the VM root symlink: %v", err)
 	}
 }
 

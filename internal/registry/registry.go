@@ -7,11 +7,14 @@ import (
 	"path/filepath"
 
 	"github.com/google/go-containerregistry/pkg/registry"
+
+	"github.com/guilhermebr/goship/pkg/domain/entities"
 )
 
 // Registry wraps an OCI-compliant container registry backed by disk storage.
 type Registry struct {
 	handler  http.Handler
+	dataDir  string
 	storeDir string
 }
 
@@ -27,6 +30,7 @@ func New(dataDir string) (*Registry, error) {
 
 	return &Registry{
 		handler:  handler,
+		dataDir:  dataDir,
 		storeDir: storeDir,
 	}, nil
 }
@@ -44,12 +48,20 @@ func (r *Registry) StoreDir() string {
 // CleanupProject removes all registry storage for a project namespace.
 // Project images are stored under the namespace "goship-<project>/".
 func (r *Registry) CleanupProject(projectName string) error {
-	namespace := fmt.Sprintf("goship-%s", projectName)
-	nsDir := filepath.Join(r.storeDir, namespace)
-
-	if _, err := os.Stat(nsDir); os.IsNotExist(err) {
-		return nil
+	if err := entities.ValidateProjectName(projectName); err != nil {
+		return fmt.Errorf("invalid registry project name: %w", err)
 	}
-
-	return os.RemoveAll(nsDir)
+	namespace := fmt.Sprintf("goship-%s", projectName)
+	root, err := os.OpenRoot(r.dataDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to open registry storage root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.RemoveAll(filepath.Join("registry", namespace)); err != nil {
+		return fmt.Errorf("failed to clean registry project %q: %w", projectName, err)
+	}
+	return nil
 }

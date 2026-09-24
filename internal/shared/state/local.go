@@ -4,6 +4,7 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -92,6 +93,29 @@ func (s *Store) load() error {
 	if state.Nodes == nil {
 		state.Nodes = make(map[string]*entities.Node)
 	}
+	for id, project := range state.Projects {
+		if project == nil {
+			return fmt.Errorf("invalid project %q in state: null project", id)
+		}
+		if err := entities.ValidateProjectName(project.Name); err != nil {
+			return fmt.Errorf("invalid project %q in state: %w", id, err)
+		}
+	}
+	for projectID, apps := range state.Apps {
+		for appName, app := range apps {
+			if app == nil {
+				return fmt.Errorf("invalid app %q for project %q in state: null app", appName, projectID)
+			}
+			if err := entities.ValidateAppName(app.Name); err != nil {
+				return fmt.Errorf("invalid app %q for project %q in state: %w", appName, projectID, err)
+			}
+		}
+	}
+	for id, instance := range state.Instances {
+		if err := validateInstanceBinding(state.Projects, instance); err != nil {
+			return fmt.Errorf("invalid instance %q in state: %w", id, err)
+		}
+	}
 
 	s.state = &state
 	return nil
@@ -121,6 +145,9 @@ func (s *Store) CreateProject(
 ) (*entities.Project, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := entities.ValidateProjectName(name); err != nil {
+		return nil, err
+	}
 
 	// Check if project already exists
 	for _, p := range s.state.Projects {
@@ -187,6 +214,12 @@ func (s *Store) ListProjects() []*entities.Project {
 func (s *Store) UpdateProject(project *entities.Project) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if project == nil {
+		return errors.New("project is required")
+	}
+	if err := entities.ValidateProjectName(project.Name); err != nil {
+		return err
+	}
 
 	if _, ok := s.state.Projects[project.ID]; !ok {
 		return fmt.Errorf("project not found: %s", project.ID)
@@ -231,6 +264,9 @@ func (s *Store) DeleteProject(id string) error {
 func (s *Store) SetInstance(instance *entities.ProjectInstance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := validateInstanceBinding(s.state.Projects, instance); err != nil {
+		return err
+	}
 
 	s.state.Instances[instance.ID] = instance
 
@@ -249,15 +285,35 @@ func (s *Store) GetInstance(projectID string) *entities.ProjectInstance {
 func (s *Store) UpdateInstance(instance *entities.ProjectInstance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if instance == nil {
+		return errors.New("project instance is required")
+	}
 
 	if _, ok := s.state.Instances[instance.ID]; !ok {
 		return fmt.Errorf("instance not found: %s", instance.ID)
+	}
+	if err := validateInstanceBinding(s.state.Projects, instance); err != nil {
+		return err
 	}
 
 	instance.UpdatedAt = time.Now()
 	s.state.Instances[instance.ID] = instance
 
 	return s.save()
+}
+
+func validateInstanceBinding(
+	projects map[string]*entities.Project,
+	instance *entities.ProjectInstance,
+) error {
+	if instance == nil {
+		return errors.New("project instance is required")
+	}
+	project, ok := projects[instance.ProjectID]
+	if !ok {
+		return fmt.Errorf("instance %q references unknown project %q", instance.ID, instance.ProjectID)
+	}
+	return entities.ValidateProjectInstanceBinding(project, instance)
 }
 
 // GetInstanceByID returns an instance by ID.
@@ -282,6 +338,12 @@ func (s *Store) DeleteInstance(instanceID string) error {
 func (s *Store) SetApp(projectID string, app *entities.AppSpec) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if app == nil {
+		return errors.New("app is required")
+	}
+	if err := entities.ValidateAppName(app.Name); err != nil {
+		return err
+	}
 
 	s.state.SetApp(projectID, app)
 

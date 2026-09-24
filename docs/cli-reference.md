@@ -21,7 +21,7 @@ These flags apply to all commands:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GOSHIP_ADDR` | `:8080` | API server listen address |
+| `GOSHIP_SERVER_ADDR` | `127.0.0.1:8080` | API server listen address |
 | `GOSHIP_PROXY_ADDR` | `:8081` | Reverse proxy listen address |
 | `GOSHIP_DATA_DIR` | `~/.goship` | Data directory |
 | `GOSHIP_INIT_BINARY_PATH` | `./bin/goship-init` | Path to goship-init binary |
@@ -31,6 +31,10 @@ These flags apply to all commands:
 ### API Mode
 
 When `--api-url` (or `GOSHIP_API_URL`) is set, `goship` talks to a running `goship server` server over HTTP instead of calling libvirt directly. This enables remote management without requiring libvirt on the client machine.
+
+The API listens on loopback by default because authentication and TLS are not
+yet implemented. Do not expose it directly to an untrusted network. Use a
+protected tunnel for remote management.
 
 ```bash
 # Start the API server

@@ -50,7 +50,7 @@ type updateState struct {
 type uploadState struct {
 	tmpFile  *os.File
 	destDir  string // e.g., /opt/goship/binaries/<appName>/
-	fileName string // sanitized original filename
+	fileName string // validated original filename
 	size     int64
 	checksum string // expected sha256 hex
 	received int64
@@ -182,6 +182,9 @@ func (i *Init) handleDeploy(cmd *v1.InitCommand) *v1.InitResponse {
 	if cmd.App == nil {
 		return &v1.InitResponse{Status: v1.StatusError, Error: "app spec is required"}
 	}
+	if err := entities.ValidateAppName(cmd.App.Name); err != nil {
+		return &v1.InitResponse{Status: v1.StatusError, Error: err.Error()}
+	}
 
 	if cmd.App.IsContainerMode() {
 		if cmd.App.Image == "" {
@@ -203,8 +206,8 @@ func (i *Init) handleDeploy(cmd *v1.InitCommand) *v1.InitResponse {
 }
 
 func (i *Init) handleStop(cmd *v1.InitCommand) *v1.InitResponse {
-	if cmd.AppName == "" {
-		return &v1.InitResponse{Status: v1.StatusError, Error: "app name is required"}
+	if err := entities.ValidateAppName(cmd.AppName); err != nil {
+		return &v1.InitResponse{Status: v1.StatusError, Error: err.Error()}
 	}
 
 	if err := i.executor.Stop(i.ctx, cmd.AppName); err != nil {
@@ -214,8 +217,8 @@ func (i *Init) handleStop(cmd *v1.InitCommand) *v1.InitResponse {
 }
 
 func (i *Init) handleRemove(cmd *v1.InitCommand) *v1.InitResponse {
-	if cmd.AppName == "" {
-		return &v1.InitResponse{Status: v1.StatusError, Error: "app name is required"}
+	if err := entities.ValidateAppName(cmd.AppName); err != nil {
+		return &v1.InitResponse{Status: v1.StatusError, Error: err.Error()}
 	}
 
 	if err := i.executor.Remove(i.ctx, cmd.AppName); err != nil {
@@ -232,6 +235,9 @@ func (i *Init) handleLogs(cmd *v1.InitCommand) *v1.InitResponse {
 
 	// If AppName is set, route through the executor (Docker API or process log file).
 	if cmd.AppName != "" {
+		if err := entities.ValidateAppName(cmd.AppName); err != nil {
+			return &v1.InitResponse{Status: v1.StatusError, Error: err.Error()}
+		}
 		content, err := i.executor.GetLogs(i.ctx, cmd.AppName, lines)
 		if err != nil {
 			return &v1.InitResponse{
@@ -645,11 +651,11 @@ func (i *Init) handleUploadBinary(cmd *v1.InitCommand) *v1.InitResponse {
 }
 
 func (i *Init) handleUploadBegin(cmd *v1.InitCommand) *v1.InitResponse {
-	if cmd.AppName == "" {
-		return &v1.InitResponse{Status: v1.StatusError, Error: "app_name is required"}
+	if err := entities.ValidateAppName(cmd.AppName); err != nil {
+		return &v1.InitResponse{Status: v1.StatusError, Error: err.Error()}
 	}
-	if cmd.FileName == "" {
-		return &v1.InitResponse{Status: v1.StatusError, Error: "file_name is required"}
+	if err := validateUploadFileName(cmd.FileName); err != nil {
+		return &v1.InitResponse{Status: v1.StatusError, Error: err.Error()}
 	}
 	if cmd.Size <= 0 {
 		return &v1.InitResponse{Status: v1.StatusError, Error: "size must be positive"}
@@ -658,17 +664,8 @@ func (i *Init) handleUploadBegin(cmd *v1.InitCommand) *v1.InitResponse {
 		return &v1.InitResponse{Status: v1.StatusError, Error: "checksum is required"}
 	}
 
-	// Sanitize filename: no slashes, no path traversal.
-	fileName := filepath.Base(cmd.FileName)
-	if fileName == "." || fileName == ".." || strings.Contains(fileName, "/") || strings.Contains(fileName, "\\") {
-		return &v1.InitResponse{Status: v1.StatusError, Error: "invalid file name"}
-	}
-
-	// Sanitize app name.
-	appName := filepath.Base(cmd.AppName)
-	if appName == "." || appName == ".." {
-		return &v1.InitResponse{Status: v1.StatusError, Error: "invalid app name"}
-	}
+	fileName := cmd.FileName
+	appName := cmd.AppName
 
 	// Cancel any previous in-progress upload.
 	i.cleanupUpload()
@@ -701,6 +698,17 @@ func (i *Init) handleUploadBegin(cmd *v1.InitCommand) *v1.InitResponse {
 
 	log.Printf("goship-init: upload-binary begin, app=%s file=%s size=%d", appName, fileName, cmd.Size)
 	return &v1.InitResponse{Status: v1.StatusOK}
+}
+
+func validateUploadFileName(name string) error {
+	if name == "" {
+		return errors.New("file name is required")
+	}
+	if name == "." || name == ".." || strings.ContainsRune(name, '/') ||
+		strings.ContainsRune(name, rune(filepath.Separator)) || strings.ContainsRune(name, '\x00') {
+		return fmt.Errorf("file name %q must be a single path component", name)
+	}
+	return nil
 }
 
 func (i *Init) handleUploadData(cmd *v1.InitCommand) *v1.InitResponse {

@@ -174,7 +174,7 @@ func (r *Runtime) CreateInstance(ctx context.Context, project *entities.Project)
 		return nil, fmt.Errorf("failed to create VM: %w", err)
 	}
 
-	socketPath := filepath.Join(r.config.DataDir, "vms", project.Name, "goship.sock")
+	socketPath := filepath.Join(filepath.Dir(vmInfo.Disk), "goship.sock")
 
 	instance := &entities.ProjectInstance{
 		ID:         instanceID,
@@ -219,8 +219,15 @@ func (r *Runtime) LoadInstance(instance *entities.ProjectInstance) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	vmName := strings.TrimPrefix(instance.DomainName, DomainPrefix)
-	socketPath := filepath.Join(r.config.DataDir, "vms", vmName, "goship.sock")
+	vmName, err := ProjectNameFromDomain(instance.DomainName)
+	if err != nil {
+		return
+	}
+	dir, err := vmDir(r.config.DataDir, vmName)
+	if err != nil {
+		return
+	}
+	socketPath := filepath.Join(dir, "goship.sock")
 
 	r.instances[instance.ID] = &instanceInfo{
 		instance:   instance,
@@ -357,7 +364,10 @@ func (r *Runtime) DestroyInstance(ctx context.Context, instanceID string) error 
 	}
 
 	// Extract project name from domain name.
-	vmName := strings.TrimPrefix(info.instance.DomainName, DomainPrefix)
+	vmName, err := ProjectNameFromDomain(info.instance.DomainName)
+	if err != nil {
+		return err
+	}
 
 	mgr := &VMManager{conn: r.conn, dataDir: r.config.DataDir}
 	if _, err := mgr.Destroy(vmName, false); err != nil {
@@ -471,6 +481,12 @@ func (r *Runtime) StartInstance(ctx context.Context, instanceID string) error {
 
 // DeployApp deploys an application inside a VM instance via virtio-serial.
 func (r *Runtime) DeployApp(ctx context.Context, instanceID string, app *entities.AppSpec) error {
+	if app == nil {
+		return errors.New("app spec is required")
+	}
+	if err := entities.ValidateAppName(app.Name); err != nil {
+		return err
+	}
 	r.mu.RLock()
 	info, ok := r.instances[instanceID]
 	r.mu.RUnlock()
@@ -499,6 +515,9 @@ func (r *Runtime) DeployApp(ctx context.Context, instanceID string, app *entitie
 
 // StopApp stops a running application inside a VM instance via virtio-serial.
 func (r *Runtime) StopApp(ctx context.Context, instanceID string, appName string) error {
+	if err := entities.ValidateAppName(appName); err != nil {
+		return err
+	}
 	r.mu.RLock()
 	info, ok := r.instances[instanceID]
 	r.mu.RUnlock()
@@ -527,6 +546,9 @@ func (r *Runtime) StopApp(ctx context.Context, instanceID string, appName string
 
 // RemoveApp removes an application from a VM instance via virtio-serial.
 func (r *Runtime) RemoveApp(ctx context.Context, instanceID string, appName string) error {
+	if err := entities.ValidateAppName(appName); err != nil {
+		return err
+	}
 	r.mu.RLock()
 	info, ok := r.instances[instanceID]
 	r.mu.RUnlock()
@@ -607,6 +629,9 @@ func (r *Runtime) UploadBinary(
 	size int64,
 	checksum string,
 ) error {
+	if err := entities.ValidateAppName(appName); err != nil {
+		return err
+	}
 	r.mu.RLock()
 	info, ok := r.instances[instanceID]
 	r.mu.RUnlock()
@@ -757,6 +782,9 @@ func (r *Runtime) UploadImage(
 
 // GetAppLogs retrieves log output from an application inside a VM instance.
 func (r *Runtime) GetAppLogs(ctx context.Context, instanceID string, appName string, lines int) (string, error) {
+	if err := entities.ValidateAppName(appName); err != nil {
+		return "", err
+	}
 	r.mu.RLock()
 	info, ok := r.instances[instanceID]
 	r.mu.RUnlock()
@@ -902,9 +930,18 @@ func (r *Runtime) ResizeInstance(ctx context.Context, instanceID string, project
 	}
 
 	// Derive paths from the domain name.
-	vmName := strings.TrimPrefix(info.instance.DomainName, DomainPrefix)
-	disk := diskPath(r.config.DataDir, vmName)
-	dir := vmDir(r.config.DataDir, vmName)
+	vmName, err := ProjectNameFromDomain(info.instance.DomainName)
+	if err != nil {
+		return err
+	}
+	disk, err := diskPath(r.config.DataDir, vmName)
+	if err != nil {
+		return err
+	}
+	dir, err := vmDir(r.config.DataDir, vmName)
+	if err != nil {
+		return err
+	}
 	socketPath := filepath.Join(dir, "goship.sock")
 
 	// Build the cloud-init CDROMs list (preserve existing cloud-init ISO if present).

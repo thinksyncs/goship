@@ -27,7 +27,7 @@ import (
 var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Start the GoShip API server and reverse proxy",
-	Long: `Start the GoShip API server (default :8080) and reverse proxy (default :8081).
+	Long: `Start the GoShip API server (default 127.0.0.1:8080) and reverse proxy (default :8081).
 
 The server provides a REST API for managing projects and apps, and a reverse
 proxy that routes HTTP traffic to apps running inside VMs based on domain names.`,

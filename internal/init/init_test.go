@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	v1 "github.com/guilhermebr/goship/pkg/api/v1"
+	"github.com/guilhermebr/goship/pkg/domain/entities"
 )
 
 //nolint:unparam // Test helper returns consistent signature for flexibility
@@ -97,6 +98,52 @@ func TestHandleLogs(t *testing.T) {
 	resp := agent.handleLogs(&v1.InitCommand{Action: v1.ActionLogs, Lines: 10})
 	if resp.Status != v1.StatusError {
 		t.Fatalf("expected error status for missing log file, got %q", resp.Status)
+	}
+}
+
+func TestHandlersRejectUnsafeAppNames(t *testing.T) {
+	agent := &Init{}
+	unsafeName := "../../outside"
+
+	responses := []*v1.InitResponse{
+		agent.handleDeploy(&v1.InitCommand{App: &entities.AppSpec{Name: unsafeName}}),
+		agent.handleStop(&v1.InitCommand{AppName: unsafeName}),
+		agent.handleRemove(&v1.InitCommand{AppName: unsafeName}),
+		agent.handleLogs(&v1.InitCommand{AppName: unsafeName}),
+	}
+	for i, resp := range responses {
+		if resp.Status != v1.StatusError {
+			t.Fatalf("handler %d accepted unsafe app name", i)
+		}
+	}
+}
+
+func TestHandleUploadBeginRejectsPathComponents(t *testing.T) {
+	agent := &Init{}
+	base := v1.InitCommand{
+		Phase:    phaseBegin,
+		AppName:  "web",
+		FileName: "server",
+		Size:     1,
+		Checksum: "checksum",
+	}
+
+	for _, appName := range []string{"../../outside", "/tmp/x", "a//b", "bad\x00name"} {
+		cmd := base
+		cmd.AppName = appName
+		if resp := agent.handleUploadBegin(&cmd); resp.Status != v1.StatusError {
+			t.Fatalf("handleUploadBegin accepted app name %q", appName)
+		}
+	}
+	for _, fileName := range []string{"../server", "/tmp/server", "a//b", "bad\x00name"} {
+		cmd := base
+		cmd.FileName = fileName
+		if resp := agent.handleUploadBegin(&cmd); resp.Status != v1.StatusError {
+			t.Fatalf("handleUploadBegin accepted file name %q", fileName)
+		}
+	}
+	if err := validateUploadFileName(`a\b`); err != nil {
+		t.Fatalf("validateUploadFileName rejected a Linux filename containing a backslash: %v", err)
 	}
 }
 

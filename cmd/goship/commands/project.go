@@ -369,6 +369,9 @@ func runProjectDelete(cmd *cobra.Command, args []string) error {
 	// Destroy the VM instance if one exists.
 	instance := store.GetInstance(project.ID)
 	if instance != nil {
+		if err := entities.ValidateProjectInstanceBinding(project, instance); err != nil {
+			return fmt.Errorf("invalid project instance binding: %w", err)
+		}
 		printVerbose("Destroying VM: %s", instance.ID)
 
 		// Load persisted instance into runtime so DestroyInstance can find it.
@@ -582,8 +585,14 @@ func runProjectLogs(cmd *cobra.Command, args []string) error {
 	}
 
 	// Derive the socket path from the domain name.
-	vmName := strings.TrimPrefix(instance.DomainName, lvrt.DomainPrefix)
-	socketPath := filepath.Join(expandDataDir(cfg.DataDir), "vms", vmName, "goship.sock")
+	vmName, err := lvrt.ProjectNameFromDomain(instance.DomainName)
+	if err != nil {
+		return err
+	}
+	socketPath, err := lvrt.VMSocketPath(expandDataDir(cfg.DataDir), vmName)
+	if err != nil {
+		return err
+	}
 
 	fetchLogs := func() (string, error) {
 		comm, commErr := lvrt.NewVMCommunicator(socketPath)
@@ -1045,8 +1054,14 @@ func runProjectUpdateInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Connect to VM via virtio-serial.
-	vmName := strings.TrimPrefix(instance.DomainName, lvrt.DomainPrefix)
-	socketPath := filepath.Join(expandDataDir(cfg.DataDir), "vms", vmName, "goship.sock")
+	vmName, err := lvrt.ProjectNameFromDomain(instance.DomainName)
+	if err != nil {
+		return err
+	}
+	socketPath, err := lvrt.VMSocketPath(expandDataDir(cfg.DataDir), vmName)
+	if err != nil {
+		return err
+	}
 
 	comm, err := lvrt.NewVMCommunicator(socketPath)
 	if err != nil {

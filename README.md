@@ -176,8 +176,9 @@ goship app deploy myapp web
 # Use direct libvirt mode (skip server)
 goship --direct project list
 
-# Use explicit remote server
-GOSHIP_API_URL=http://remote:8080 goship project list
+# Use a protected tunnel for a remote server (API has no auth/TLS yet)
+ssh -L 8080:127.0.0.1:8080 remote
+GOSHIP_API_URL=http://127.0.0.1:8080 goship project list
 
 # Clean up
 goship app delete myapp web

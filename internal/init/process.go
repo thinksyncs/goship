@@ -63,13 +63,19 @@ func NewProcessManager() (*ProcessManager, error) {
 	}, nil
 }
 
-// processLogPath returns the log file path for a given app.
-func processLogPath(appName string) string {
-	return filepath.Join("/var/log", fmt.Sprintf("goship-%s.log", appName))
+// processLogPath returns the log file path for a validated app name.
+func processLogPath(appName string) (string, error) {
+	if err := entities.ValidateAppName(appName); err != nil {
+		return "", err
+	}
+	return filepath.Join("/var/log", fmt.Sprintf("goship-%s.log", appName)), nil
 }
 
 // Deploy starts a process for the given app spec.
 func (m *ProcessManager) Deploy(ctx context.Context, app *entities.AppSpec) error {
+	if err := validateProcessApp(app); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -81,14 +87,6 @@ func (m *ProcessManager) Deploy(ctx context.Context, app *entities.AppSpec) erro
 	}
 
 	binary := app.Binary
-	if binary == "" {
-		return errors.New("binary path is required for process mode")
-	}
-
-	if _, err := os.Stat(binary); os.IsNotExist(err) {
-		return fmt.Errorf("binary not found: %s", binary)
-	}
-
 	// Build arguments.
 	var args []string
 	if len(app.Command) > 0 {
@@ -105,7 +103,10 @@ func (m *ProcessManager) Deploy(ctx context.Context, app *entities.AppSpec) erro
 	}
 
 	// Open log file for stdout/stderr.
-	logPath := processLogPath(app.Name)
+	logPath, err := processLogPath(app.Name)
+	if err != nil {
+		return err
+	}
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open log file %s: %w", logPath, err)
@@ -153,6 +154,22 @@ func (m *ProcessManager) Deploy(ctx context.Context, app *entities.AppSpec) erro
 	// Monitor process in background.
 	go m.monitorProcess(proc)
 
+	return nil
+}
+
+func validateProcessApp(app *entities.AppSpec) error {
+	if app == nil {
+		return errors.New("app spec is required")
+	}
+	if err := entities.ValidateAppName(app.Name); err != nil {
+		return err
+	}
+	if app.Binary == "" {
+		return errors.New("binary path is required for process mode")
+	}
+	if _, err := os.Stat(app.Binary); os.IsNotExist(err) {
+		return fmt.Errorf("binary not found: %s", app.Binary)
+	}
 	return nil
 }
 
@@ -232,7 +249,11 @@ func (m *ProcessManager) GetStatus(ctx context.Context) ([]v1.AppStatus, error) 
 
 // GetLogs retrieves the last N lines from the process log file.
 func (m *ProcessManager) GetLogs(_ context.Context, appName string, lines int) (string, error) {
-	return readLastNLines(processLogPath(appName), lines)
+	logPath, err := processLogPath(appName)
+	if err != nil {
+		return "", err
+	}
+	return readLastNLines(logPath, lines)
 }
 
 // Close stops all managed processes.

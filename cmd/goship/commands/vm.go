@@ -274,7 +274,10 @@ func runVMPing(cmd *cobra.Command, args []string) error {
 	}
 	vmDataDir = expandPath(vmDataDir)
 
-	socketPath := filepath.Join(vmDataDir, "vms", name, "goship.sock")
+	socketPath, err := lvrt.VMSocketPath(vmDataDir, name)
+	if err != nil {
+		return fmt.Errorf("invalid VM name: %w", err)
+	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Pinging goship-init in VM %q...\n", name)
 

@@ -59,6 +59,74 @@ func TestNewStore_LoadsExistingState(t *testing.T) {
 	}
 }
 
+func TestNewStoreRejectsUnsafePersistedProjectName(t *testing.T) {
+	dir := t.TempDir()
+	stateJSON := []byte(`{"projects":{"project-id":{"id":"project-id","name":"../outside","runtime":"qemu"}}}`)
+	if err := os.WriteFile(filepath.Join(dir, StateFileName), stateJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewStore(dir); err == nil {
+		t.Fatal("NewStore should reject an unsafe persisted project name")
+	}
+}
+
+func TestNewStoreRejectsUnsafePersistedAppName(t *testing.T) {
+	dir := t.TempDir()
+	stateJSON := []byte(`{"apps":{"project-id":{"outside":{"name":"../../outside"}}}}`)
+	if err := os.WriteFile(filepath.Join(dir, StateFileName), stateJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewStore(dir); err == nil {
+		t.Fatal("NewStore should reject an unsafe persisted app name")
+	}
+}
+
+func TestNewStoreRejectsMismatchedPersistedInstanceDomain(t *testing.T) {
+	dir := t.TempDir()
+	stateJSON := []byte(`{
+		"projects":{"project-alpha":{"id":"project-alpha","name":"alpha","runtime":"qemu"}},
+		"instances":{"instance-alpha":{
+			"id":"instance-alpha",
+			"project_id":"project-alpha",
+			"domain_name":"goship-beta"
+		}}
+	}`)
+	if err := os.WriteFile(filepath.Join(dir, StateFileName), stateJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewStore(dir); err == nil {
+		t.Fatal("NewStore should reject a domain bound to a different project name")
+	}
+}
+
+func TestNewStoreLoadsLinuxBackslashNames(t *testing.T) {
+	if filepath.Separator != '/' {
+		t.Skip("backslash is only a filename character on Unix-like systems")
+	}
+	dir := t.TempDir()
+	stateJSON := []byte(`{
+		"projects":{"project-id":{"id":"project-id","name":"a\\b","runtime":"qemu"}},
+		"apps":{"project-id":{"x\\y":{"name":"x\\y"}}}
+	}`)
+	if err := os.WriteFile(filepath.Join(dir, StateFileName), stateJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore rejected existing Linux backslash names: %v", err)
+	}
+	if _, err := store.GetProject(`a\b`); err != nil {
+		t.Fatalf("backslash project was not loaded: %v", err)
+	}
+	if app := store.GetApp("project-id", `x\y`); app == nil {
+		t.Fatal("backslash app was not loaded")
+	}
+}
+
 func TestNewStore_CreatesDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "dir")
 	_, err := NewStore(dir)
@@ -96,6 +164,18 @@ func TestCreateProject(t *testing.T) {
 	}
 	if project.Resources.CPU != 2 {
 		t.Errorf("CPU = %v, want 2", project.Resources.CPU)
+	}
+}
+
+func TestCreateProjectRejectsUnsafeName(t *testing.T) {
+	store := setupTestStore(t)
+	for _, name := range []string{"", ".", "..", "../registry", "a/../../target", "/tmp/x", "a//b", "bad\x00name"} {
+		if _, err := store.CreateProject(name, entities.RuntimeQEMU, entities.Resources{}); err == nil {
+			t.Fatalf("CreateProject(%q) should fail", name)
+		}
+	}
+	if got := store.ListProjects(); len(got) != 0 {
+		t.Fatalf("unsafe projects were persisted: %v", got)
 	}
 }
 
@@ -300,10 +380,11 @@ func TestSetAndGetInstance(t *testing.T) {
 
 func TestGetInstanceByID(t *testing.T) {
 	store := setupTestStore(t)
+	project, _ := store.CreateProject("lookup-project", entities.RuntimeQEMU, entities.Resources{})
 
 	instance := &entities.ProjectInstance{
 		ID:        "lookup-me",
-		ProjectID: "some-project",
+		ProjectID: project.ID,
 		State:     entities.InstanceStateRunning,
 	}
 	_ = store.SetInstance(instance)
@@ -312,8 +393,8 @@ func TestGetInstanceByID(t *testing.T) {
 	if got == nil {
 		t.Fatal("GetInstanceByID returned nil")
 	}
-	if got.ProjectID != "some-project" {
-		t.Errorf("ProjectID = %q, want %q", got.ProjectID, "some-project")
+	if got.ProjectID != project.ID {
+		t.Errorf("ProjectID = %q, want %q", got.ProjectID, project.ID)
 	}
 }
 
@@ -328,10 +409,11 @@ func TestGetInstanceByID_NotFound(t *testing.T) {
 
 func TestUpdateInstance(t *testing.T) {
 	store := setupTestStore(t)
+	project, _ := store.CreateProject("update-project", entities.RuntimeQEMU, entities.Resources{})
 
 	instance := &entities.ProjectInstance{
 		ID:        "update-inst",
-		ProjectID: "proj",
+		ProjectID: project.ID,
 		State:     entities.InstanceStateRunning,
 	}
 	_ = store.SetInstance(instance)
@@ -366,10 +448,11 @@ func TestUpdateInstance_NotFound(t *testing.T) {
 
 func TestDeleteInstance(t *testing.T) {
 	store := setupTestStore(t)
+	project, _ := store.CreateProject("delete-instance-project", entities.RuntimeQEMU, entities.Resources{})
 
 	_ = store.SetInstance(&entities.ProjectInstance{
 		ID:        "del-inst",
-		ProjectID: "proj",
+		ProjectID: project.ID,
 		State:     entities.InstanceStateRunning,
 	})
 
@@ -405,6 +488,35 @@ func TestSetAndGetApp(t *testing.T) {
 	}
 	if got.Image != "nginx:alpine" {
 		t.Errorf("Image = %q, want %q", got.Image, "nginx:alpine")
+	}
+}
+
+func TestSetAppRejectsUnsafeName(t *testing.T) {
+	store := setupTestStore(t)
+	for _, name := range []string{"", ".", "..", "../../outside", "/tmp/x", "a/b", "a//b", "bad\x00name"} {
+		if err := store.SetApp("project-id", &entities.AppSpec{Name: name}); err == nil {
+			t.Fatalf("SetApp(%q) should fail", name)
+		}
+	}
+	if err := store.SetApp("project-id", nil); err == nil {
+		t.Fatal("SetApp(nil) should fail")
+	}
+}
+
+func TestSetInstanceRejectsMismatchedDomain(t *testing.T) {
+	store := setupTestStore(t)
+	project, _ := store.CreateProject("alpha", entities.RuntimeQEMU, entities.Resources{})
+	instance := &entities.ProjectInstance{
+		ID:         "instance-alpha",
+		ProjectID:  project.ID,
+		DomainName: "goship-beta",
+	}
+
+	if err := store.SetInstance(instance); err == nil {
+		t.Fatal("SetInstance should reject a domain bound to a different project name")
+	}
+	if got := store.GetInstanceByID(instance.ID); got != nil {
+		t.Fatal("mismatched instance was persisted")
 	}
 }
 

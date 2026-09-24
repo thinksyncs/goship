@@ -960,8 +960,14 @@ func getLiveAppStatuses(project *entities.Project) map[string]v1.AppStatus {
 		return statuses
 	}
 
-	vmName := strings.TrimPrefix(instance.DomainName, lvrt.DomainPrefix)
-	socketPath := filepath.Join(expandDataDir(cfg.DataDir), "vms", vmName, "goship.sock")
+	vmName, err := lvrt.ProjectNameFromDomain(instance.DomainName)
+	if err != nil {
+		return statuses
+	}
+	socketPath, err := lvrt.VMSocketPath(expandDataDir(cfg.DataDir), vmName)
+	if err != nil {
+		return statuses
+	}
 
 	comm, err := lvrt.NewVMCommunicator(socketPath)
 	if err != nil {

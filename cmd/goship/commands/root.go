@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -272,7 +273,10 @@ func initResources(cmd *cobra.Command, args []string) error {
 // detectServer probes the local server healthcheck endpoint.
 // Returns the server URL if reachable, empty string otherwise.
 func detectServer() string {
-	url := fmt.Sprintf("http://localhost%s", cfg.ServerAddr)
+	url, err := serverProbeURL(cfg.ServerAddr)
+	if err != nil {
+		return ""
+	}
 	healthURL := url + "/healthz"
 
 	httpClient := &http.Client{Timeout: 1 * time.Second}
@@ -286,6 +290,19 @@ func detectServer() string {
 		return url
 	}
 	return ""
+}
+
+func serverProbeURL(listenAddr string) (string, error) {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return "", fmt.Errorf("invalid server listen address %q: %w", listenAddr, err)
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	} else if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port), nil
 }
 
 // reconcileState synchronizes the state store with actual libvirt domain states.

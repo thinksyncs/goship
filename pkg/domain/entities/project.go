@@ -1,6 +1,35 @@
 package entities
 
-import "time"
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+func validatePathComponent(kind, name string) error {
+	if name == "" {
+		return fmt.Errorf("%s name is required", kind)
+	}
+	if name == "." || name == ".." || strings.ContainsRune(name, '/') ||
+		strings.ContainsRune(name, rune(filepath.Separator)) || strings.ContainsRune(name, '\x00') {
+		return fmt.Errorf("%s name %q must be a single path component", kind, name)
+	}
+	return nil
+}
+
+// ValidateProjectName rejects names that can be interpreted as filesystem
+// paths. Project names are reused as VM, socket, and registry directory names,
+// so they must remain a single path component at every boundary.
+func ValidateProjectName(name string) error {
+	return validatePathComponent("project", name)
+}
+
+// ValidateAppName rejects names that can escape app-specific log and binary
+// directories inside a guest VM.
+func ValidateAppName(name string) error {
+	return validatePathComponent("app", name)
+}
 
 // RuntimeType defines the VM runtime backend.
 type RuntimeType string

@@ -173,7 +173,7 @@ The binary is uploaded over virtio-serial with SHA256 verification, then started
 Instead of calling libvirt directly, you can run the `goship server` REST API server and point the CLI at it:
 
 ```bash
-# Start the API server (runs on :8080 by default)
+# Start the API server (runs on 127.0.0.1:8080 by default)
 goship server &
 
 # Point the CLI at the API server
@@ -186,7 +186,10 @@ export GOSHIP_API_URL=http://localhost:8080
 ./bin/goship app deploy myapp web
 ```
 
-This enables remote management — the CLI no longer requires libvirt on the client machine. Some commands that require direct VM access (console, project logs, push-image) are not available in API mode.
+For remote management, forward the loopback listener through a protected tunnel.
+The API does not yet provide authentication or TLS and must not be exposed
+directly to an untrusted network. The CLI no longer requires libvirt on the
+client machine when it uses the API.
 
 ## Next Steps
 

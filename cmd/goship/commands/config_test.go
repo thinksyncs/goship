@@ -51,6 +51,13 @@ func TestConfigEnvVars_Bool(t *testing.T) {
 	}
 }
 
+func TestConfigDefaultServerAddrIsLoopback(t *testing.T) {
+	got := parseConfig(t)
+	if got.ServerAddr != "127.0.0.1:8080" {
+		t.Fatalf("ServerAddr = %q, want loopback default", got.ServerAddr)
+	}
+}
+
 func parseConfig(t *testing.T) Config {
 	t.Helper()
 	var c Config

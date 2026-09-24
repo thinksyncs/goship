@@ -15,7 +15,7 @@ import (
 
 const (
 	// DomainPrefix is the naming prefix for all GoShip-managed libvirt domains.
-	DomainPrefix = "goship-"
+	DomainPrefix = entities.LibvirtDomainPrefix
 )
 
 // connectToLibvirt opens a connection to the local libvirt daemon.
@@ -105,14 +105,50 @@ func userFacingName(domain string) string {
 	return strings.TrimPrefix(domain, DomainPrefix)
 }
 
-// vmDir returns the directory for a VM's disk images.
-func vmDir(dataDir, name string) string {
-	return filepath.Join(dataDir, "vms", name)
+// ProjectNameFromDomain validates a GoShip libvirt domain and returns its
+// user-facing project name.
+func ProjectNameFromDomain(domain string) (string, error) {
+	if !strings.HasPrefix(domain, DomainPrefix) {
+		return "", fmt.Errorf("domain name %q is not managed by GoShip", domain)
+	}
+	name := strings.TrimPrefix(domain, DomainPrefix)
+	if err := entities.ValidateProjectName(name); err != nil {
+		return "", fmt.Errorf("invalid GoShip domain %q: %w", domain, err)
+	}
+	return name, nil
+}
+
+// vmDir returns the directory for a VM's disk images after proving that the
+// user-facing name cannot escape the VM root.
+func vmDir(dataDir, name string) (string, error) {
+	if err := entities.ValidateProjectName(name); err != nil {
+		return "", err
+	}
+	root := filepath.Join(dataDir, "vms")
+	dir := filepath.Join(root, name)
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel != name || !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("unsafe VM directory for name %q", name)
+	}
+	return dir, nil
 }
 
 // diskPath returns the path for a VM's primary disk image.
-func diskPath(dataDir, name string) string {
-	return filepath.Join(vmDir(dataDir, name), "disk.qcow2")
+func diskPath(dataDir, name string) (string, error) {
+	dir, err := vmDir(dataDir, name)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "disk.qcow2"), nil
+}
+
+// VMSocketPath returns the validated virtio-serial socket path for a project.
+func VMSocketPath(dataDir, name string) (string, error) {
+	dir, err := vmDir(dataDir, name)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "goship.sock"), nil
 }
 
 // Create orchestrates full VM creation: verifies the base image, creates the
@@ -120,13 +156,17 @@ func diskPath(dataDir, name string) string {
 //
 //nolint:funlen,gocognit,gocyclo,cyclop // VM creation requires sequential validation steps
 func (m *VMManager) Create(opts CreateVMOptions) (*VMInfo, error) {
+	dir, pathErr := vmDir(m.dataDir, opts.Name)
+	if pathErr != nil {
+		return nil, fmt.Errorf("invalid VM name: %w", pathErr)
+	}
+
 	// Verify base image exists.
 	if _, err := os.Stat(opts.BaseImage); os.IsNotExist(err) {
 		return nil, fmt.Errorf("base image not found: %s", opts.BaseImage)
 	}
 
 	// Create VM directory.
-	dir := vmDir(m.dataDir, opts.Name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create VM directory: %w", err)
 	}
@@ -140,12 +180,15 @@ func (m *VMManager) Create(opts CreateVMOptions) (*VMInfo, error) {
 	success := false
 	defer func() {
 		if !success {
-			_ = os.RemoveAll(dir)
+			_ = m.removeVMDir(opts.Name)
 		}
 	}()
 
 	// Create CoW disk image.
-	disk := diskPath(m.dataDir, opts.Name)
+	disk, pathErr := diskPath(m.dataDir, opts.Name)
+	if pathErr != nil {
+		return nil, fmt.Errorf("invalid VM disk path: %w", pathErr)
+	}
 	if err := CreateDiskImage(opts.BaseImage, disk); err != nil {
 		return nil, fmt.Errorf("failed to create disk image: %w", err)
 	}
@@ -269,6 +312,10 @@ func (m *VMManager) Create(opts CreateVMOptions) (*VMInfo, error) {
 //
 //nolint:revive // keepDisk is a standard destroy option pattern
 func (m *VMManager) Destroy(name string, keepDisk bool) (*DestroyResult, error) {
+	dir, err := vmDir(m.dataDir, name)
+	if err != nil {
+		return nil, fmt.Errorf("invalid VM name: %w", err)
+	}
 	dName := domainName(name)
 
 	domain, err := LookupVM(m.conn, dName)
@@ -283,14 +330,31 @@ func (m *VMManager) Destroy(name string, keepDisk bool) (*DestroyResult, error) 
 
 	result := &DestroyResult{}
 	if !keepDisk && m.dataDir != "" {
-		dir := vmDir(m.dataDir, name)
 		result.DiskDir = dir
-		if err := os.RemoveAll(dir); err == nil {
+		if err := m.removeVMDir(name); err == nil {
 			result.DiskRemoved = true
 		}
 	}
 
 	return result, nil
+}
+
+// removeVMDir recursively removes one validated VM directory. The Root is
+// anchored at dataDir so a symlink replacing the vms directory cannot redirect
+// deletion outside the configured data directory.
+func (m *VMManager) removeVMDir(name string) error {
+	if _, err := vmDir(m.dataDir, name); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(m.dataDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return root.RemoveAll(filepath.Join("vms", name))
 }
 
 // List returns all GoShip-managed VMs (domains with the DomainPrefix).

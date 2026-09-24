@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/guilhermebr/goship/pkg/domain/entities"
 )
 
 // Load reads and parses a goship.yml manifest from the given path.
@@ -60,8 +62,8 @@ func (m *Manifest) Validate() error {
 	if m.Version == "" {
 		return errors.New("manifest: version is required")
 	}
-	if m.Project == "" {
-		return errors.New("manifest: project name is required")
+	if err := entities.ValidateProjectName(m.Project); err != nil {
+		return fmt.Errorf("manifest: %w", err)
 	}
 	return nil
 }

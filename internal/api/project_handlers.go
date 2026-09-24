@@ -45,8 +45,8 @@ func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+	if err := entities.ValidateProjectName(req.Name); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -131,6 +131,13 @@ func (s *Server) handleProjectDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("project not found: %s", id))
 		return
 	}
+	instance := s.store.GetInstance(project.ID)
+	if instance != nil {
+		if err := entities.ValidateProjectInstanceBinding(project, instance); err != nil {
+			writeError(w, http.StatusConflict, fmt.Sprintf("invalid project instance binding: %v", err))
+			return
+		}
+	}
 
 	// Remove proxy routes for all apps in this project.
 	for _, app := range s.store.GetApps(project.ID) {
@@ -140,7 +147,6 @@ func (s *Server) handleProjectDelete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 
-	instance := s.store.GetInstance(project.ID)
 	if instance != nil {
 		s.rt.LoadInstance(instance)
 		if err := s.rt.DestroyInstance(ctx, instance.ID); err != nil {
